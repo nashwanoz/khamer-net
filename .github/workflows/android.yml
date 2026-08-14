@@ -33,20 +33,9 @@ jobs:
           npm ci
           npm run build
 
-      - name: Ensure capacitor config points to webDir=dist (create if missing)
+      - name: Ensure capacitor config points to webDir=dist
         run: |
-          if [ ! -f capacitor.config.json ]; then
-            cat > capacitor.config.json <<'JSON'
-{
-  "appId": "com.example.khamernet",
-  "appName": "KhamrNet",
-  "webDir": "dist"
-}
-JSON
-            echo "Created capacitor.config.json (webDir=dist)."
-          else
-            echo "capacitor.config.json already present."
-          fi
+          echo '{"appId":"com.example.khamernet","appName":"KhamrNet","webDir":"dist"}' > capacitor.config.json
 
       - name: Install Capacitor CLI
         run: |
@@ -68,7 +57,7 @@ JSON
           set -euo pipefail
           mkdir -p "${ANDROID_SDK_ROOT}"
           cd "${ANDROID_SDK_ROOT}"
-          URL="https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip"
+          URL="https://google.com"
           curl -sSLo cmdline.zip "$URL"
           mkdir -p cmdline-tools
           unzip -q cmdline.zip -d cmdline-tools
@@ -84,7 +73,7 @@ JSON
         run: |
           set -euo pipefail
           GRADLE_ZIP="gradle-${GRADLE_VERSION}-bin.zip"
-          DIST_URL="https://services.gradle.org/distributions/${GRADLE_ZIP}"
+          DIST_URL="https://gradle.org{GRADLE_ZIP}"
           curl -sSLo "${GRADLE_ZIP}" "${DIST_URL}"
           unzip -q "${GRADLE_ZIP}" -d gradle-dist
           sudo mv gradle-dist/gradle-${GRADLE_VERSION} /opt/gradle/gradle-${GRADLE_VERSION}
