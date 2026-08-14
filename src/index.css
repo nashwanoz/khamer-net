@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@media print {
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Hide elements that shouldn't be printed */
+  .no-print,
+  .no-print *,
+  header,
+  nav,
+  button,
+  .whatsapp-box,
+  .modal-backdrop-print {
+    display: none !important;
+  }
+
+  /* Force printable container styling */
+  .printable-container {
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 8px !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* Ensure high contrast borders and text */
+  .print-border {
+    border-color: #000000 !important;
+  }
+}

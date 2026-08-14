@@ -1,0 +1,6 @@
+{
+  "name": "خمر نت - نظام المبيعات والمخزون",
+  "description": "تطبيق خمر نت لنقاط البيع وإدارة المخزون والمستخدمين والسندات",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
