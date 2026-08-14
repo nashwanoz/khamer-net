@@ -37,12 +37,12 @@ jobs:
         run: |
           if [ ! -f capacitor.config.json ]; then
             cat > capacitor.config.json <<'JSON'
-            {
-              "appId": "com.example.khamernet",
-              "appName": "KhamrNet",
-              "webDir": "dist"
-            }
-          JSON
+{
+  "appId": "com.example.khamernet",
+  "appName": "KhamrNet",
+  "webDir": "dist"
+}
+JSON
             echo "Created capacitor.config.json (webDir=dist)."
           else
             echo "capacitor.config.json already present."
