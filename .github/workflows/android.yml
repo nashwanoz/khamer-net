@@ -1,4 +1,4 @@
-name: Android CI - generate wrapper & build Debug
+name: Android (Capacitor) build — generate wrapper & assembleDebug
 
 on:
   push:
@@ -6,13 +6,16 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  NODE_VERSION: 18
+  GRADLE_VERSION: 8.5
+  ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+
 jobs:
-  build:
-    name: Generate wrapper if missing and build APK
+  build-apk:
+    name: Build APK (Capacitor path)
     runs-on: ubuntu-latest
-    env:
-      # عدّل الإصدار هنا إذا أردت إصدار Gradle مختلف متوافق مع AGP لديك
-      GRADLE_VERSION: 8.5
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repository
@@ -20,98 +23,122 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          distribution: temurin
-          java-version: '17'
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache Gradle caches
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*','**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+      - name: Install npm deps and build web (Vite)
+        working-directory: .
+        run: |
+          npm ci
+          npm run build
 
-      - name: Ensure or install Gradle and generate wrapper if missing
+      - name: Ensure capacitor config points to webDir=dist (create if missing)
+        run: |
+          if [ ! -f capacitor.config.json ]; then
+            cat > capacitor.config.json <<'JSON'
+{
+  "appId": "com.example.khamernet",
+  "appName": "KhamrNet",
+  "webDir": "dist"
+}
+JSON
+            echo "Created capacitor.config.json (webDir=dist). Edit appId/appName if needed."
+          else
+            echo "capacitor.config.json already present."
+          fi
+
+      - name: Install Capacitor CLI (temporarily)
+        run: |
+          npm install --no-save @capacitor/cli @capacitor/core
+
+      - name: Add or sync Android platform with Capacitor
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "Checking for existing gradlew..."
-          if [ -f ./gradlew ] || [ -f ./app/gradlew ]; then
-            echo "gradlew found in repo."
-            # prefer repo-root gradlew if present
-            if [ -f ./gradlew ]; then
-              echo "Using existing ./gradlew"
-            else
-              echo "Using existing ./app/gradlew"
-            fi
+          # If android/ does not exist, add it; otherwise sync web assets
+          if [ ! -d android ]; then
+            npx cap add android
           else
-            echo "No gradlew found — installing Gradle ${GRADLE_VERSION} to generate wrapper..."
-            TMP_ZIP="gradle-${GRADLE_VERSION}.zip"
-            DIST_URL="https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+            npx cap sync android
+          fi
 
-            # Download and extract
-            curl -sSLo "${TMP_ZIP}" "${DIST_URL}"
-            unzip -q "${TMP_ZIP}" -d gradle-dist
-            sudo mkdir -p /opt/gradle
-            sudo mv gradle-dist/gradle-${GRADLE_VERSION} /opt/gradle/gradle-${GRADLE_VERSION}
-            rm -rf gradle-dist "${TMP_ZIP}"
+      - name: Install Android SDK command-line tools & packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${ANDROID_SDK_ROOT}"
+          cd "${ANDROID_SDK_ROOT}"
+          # Download command line tools
+          CLI_ZIP="commandlinetools-linux-1234_latest.zip"
+          URL="https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip"
+          curl -sSLo cmdline.zip "$URL"
+          mkdir -p cmdline-tools
+          unzip -q cmdline.zip -d cmdline-tools
+          rm cmdline.zip
+          # Move into expected layout
+          mkdir -p cmdline-tools/latest
+          mv cmdline-tools/cmdline-tools/* cmdline-tools/latest/ || true
+          export PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${PATH}"
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT}"
+          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses || true
+          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-            # Make gradle available in current step and future steps
-            echo "/opt/gradle/gradle-${GRADLE_VERSION}/bin" | sudo tee -a /etc/paths.d/gradle >/dev/null || true
-            export PATH="/opt/gradle/gradle-${GRADLE_VERSION}/bin:${PATH}"
+      - name: Install Gradle (used to generate wrapper if needed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          GRADLE_ZIP="gradle-${GRADLE_VERSION}-bin.zip"
+          DIST_URL="https://services.gradle.org/distributions/${GRADLE_ZIP}"
+          curl -sSLo "${GRADLE_ZIP}" "${DIST_URL}"
+          unzip -q "${GRADLE_ZIP}" -d gradle-dist
+          sudo mv gradle-dist/gradle-${GRADLE_VERSION} /opt/gradle/gradle-${GRADLE_VERSION}
+          rm -rf gradle-dist "${GRADLE_ZIP}"
+          echo "/opt/gradle/gradle-${GRADLE_VERSION}/bin" | sudo tee /etc/paths.d/gradle >/dev/null || true
+          export PATH="/opt/gradle/gradle-${GRADLE_VERSION}/bin:${PATH}"
+          gradle --version
 
-            # Generate wrapper at repository root (where settings.gradle(.kts) is)
-            echo "Generating Gradle wrapper in repo root..."
-            gradle --version
+      - name: Generate gradle wrapper in android/ if missing
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f ./gradlew ]; then
+            echo "No gradlew in android/ — generating wrapper using system gradle"
+            # run gradle wrapper in android project root to create gradlew
             gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin
-
-            # Ensure wrapper executable
-            if [ -f ./gradlew ]; then
-              chmod +x ./gradlew
-            fi
+            chmod +x ./gradlew
+          else
+            echo "gradlew already present in android/"
+            chmod +x ./gradlew
           fi
 
-      - name: Make wrapper executable (double-check)
-        if: always()
-        run: |
-          if [ -f ./gradlew ]; then chmod +x ./gradlew; fi
-          if [ -f ./app/gradlew ]; then chmod +x ./app/gradlew; fi
-
-      - name: Build :app assembleDebug
+      - name: Copy web assets into Android (Capacitor copy)
         shell: bash
         run: |
           set -euo pipefail
-          echo "Starting assembleDebug for :app"
-          # Prefer repo-root gradlew if exists, otherwise use gradle from PATH or app/gradlew
-          if [ -f ./gradlew ]; then
-            ./gradlew :app:assembleDebug --no-daemon --stacktrace
-          elif [ -f ./app/gradlew ]; then
-            (cd app && ./gradlew assembleDebug --no-daemon --stacktrace)
-          else
-            # fallback: try system gradle (should be present if installed earlier and exported to PATH)
-            if command -v gradle >/dev/null 2>&1; then
-              echo "Using system gradle to run wrapper task"
-              gradle :app:assembleDebug --no-daemon --stacktrace
-            else
-              echo "ERROR: No gradlew and no gradle in PATH. Cannot build." >&2
-              exit 1
-            fi
-          fi
+          npx cap copy android
 
-      - name: List produced APKs (for debugging)
-        if: always()
+      - name: Build Android APK (assembleDebug) from android/
+        working-directory: android
+        shell: bash
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          PATH: ${{ env.PATH }}:${{ env.ANDROID_SDK_ROOT }}/platform-tools
         run: |
-          echo "Looking for APKs under app/build/outputs/"
-          find app/build/outputs -type f -iname "*.apk" -maxdepth 5 -print || true
+          set -euo pipefail
+          echo "Running gradle assembleDebug inside android/ (will build :app)"
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: List produced APK(s)
+        run: |
+          echo "APK files under android/app/build/outputs:"
+          find android/app/build/outputs -type f -iname "*.apk" -maxdepth 6 -print || true
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-apks
-          path: app/build/outputs/**/*.apk
+          name: android-apks
+          path: android/app/build/outputs/**/*.apk
