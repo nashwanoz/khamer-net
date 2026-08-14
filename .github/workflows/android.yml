@@ -1,4 +1,4 @@
-name: Android CI
+name: Android CI - generate wrapper & build Debug
 
 on:
   push:
@@ -8,8 +8,11 @@ on:
 
 jobs:
   build:
-    name: Build APK
+    name: Generate wrapper if missing and build APK
     runs-on: ubuntu-latest
+    env:
+      # عدّل الإصدار هنا إذا أردت إصدار Gradle مختلف متوافق مع AGP لديك
+      GRADLE_VERSION: 8.5
 
     steps:
       - name: Checkout repository
@@ -23,7 +26,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Cache Gradle
+      - name: Cache Gradle caches
         uses: actions/cache@v4
         with:
           path: |
@@ -33,30 +36,79 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Ensure gradlew is executable
+      - name: Ensure or install Gradle and generate wrapper if missing
+        shell: bash
         run: |
-          if [ -f ./gradlew ]; then
-            chmod +x ./gradlew
-          fi
-          if [ -f ./app/gradlew ]; then
-            chmod +x ./app/gradlew
+          set -euo pipefail
+
+          echo "Checking for existing gradlew..."
+          if [ -f ./gradlew ] || [ -f ./app/gradlew ]; then
+            echo "gradlew found in repo."
+            # prefer repo-root gradlew if present
+            if [ -f ./gradlew ]; then
+              echo "Using existing ./gradlew"
+            else
+              echo "Using existing ./app/gradlew"
+            fi
+          else
+            echo "No gradlew found — installing Gradle ${GRADLE_VERSION} to generate wrapper..."
+            TMP_ZIP="gradle-${GRADLE_VERSION}.zip"
+            DIST_URL="https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+
+            # Download and extract
+            curl -sSLo "${TMP_ZIP}" "${DIST_URL}"
+            unzip -q "${TMP_ZIP}" -d gradle-dist
+            sudo mkdir -p /opt/gradle
+            sudo mv gradle-dist/gradle-${GRADLE_VERSION} /opt/gradle/gradle-${GRADLE_VERSION}
+            rm -rf gradle-dist "${TMP_ZIP}"
+
+            # Make gradle available in current step and future steps
+            echo "/opt/gradle/gradle-${GRADLE_VERSION}/bin" | sudo tee -a /etc/paths.d/gradle >/dev/null || true
+            export PATH="/opt/gradle/gradle-${GRADLE_VERSION}/bin:${PATH}"
+
+            # Generate wrapper at repository root (where settings.gradle(.kts) is)
+            echo "Generating Gradle wrapper in repo root..."
+            gradle --version
+            gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin
+
+            # Ensure wrapper executable
+            if [ -f ./gradlew ]; then
+              chmod +x ./gradlew
+            fi
           fi
 
-      - name: Build app (detect gradlew location to avoid duplicate paths)
+      - name: Make wrapper executable (double-check)
+        if: always()
         run: |
-          set -e
-          # If wrapper at repo root -> run it from root referencing module :app
+          if [ -f ./gradlew ]; then chmod +x ./gradlew; fi
+          if [ -f ./app/gradlew ]; then chmod +x ./app/gradlew; fi
+
+      - name: Build :app assembleDebug
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Starting assembleDebug for :app"
+          # Prefer repo-root gradlew if exists, otherwise use gradle from PATH or app/gradlew
           if [ -f ./gradlew ]; then
-            echo "Using gradlew in repo root"
-            ./gradlew :app:assembleRelease
-          # If wrapper inside app/ -> run it from app directory
+            ./gradlew :app:assembleDebug --no-daemon --stacktrace
           elif [ -f ./app/gradlew ]; then
-            echo "Using gradlew inside app/"
-            (cd app && ./gradlew assembleRelease)
+            (cd app && ./gradlew assembleDebug --no-daemon --stacktrace)
           else
-            echo "ERROR: gradlew not found in repo root nor in app/ - please commit Gradle wrapper (gradlew, gradlew.bat, gradle/wrapper/) to the repo."
-            exit 1
+            # fallback: try system gradle (should be present if installed earlier and exported to PATH)
+            if command -v gradle >/dev/null 2>&1; then
+              echo "Using system gradle to run wrapper task"
+              gradle :app:assembleDebug --no-daemon --stacktrace
+            else
+              echo "ERROR: No gradlew and no gradle in PATH. Cannot build." >&2
+              exit 1
+            fi
           fi
+
+      - name: List produced APKs (for debugging)
+        if: always()
+        run: |
+          echo "Looking for APKs under app/build/outputs/"
+          find app/build/outputs -type f -iname "*.apk" -maxdepth 5 -print || true
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
